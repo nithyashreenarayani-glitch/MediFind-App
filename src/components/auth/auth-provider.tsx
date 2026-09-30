@@ -22,19 +22,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!auth || !db) {
+    const firebaseAuth = auth;
+    const firestore = db;
+    if (!firebaseAuth || !firestore) {
       setLoading(false);
       return;
     }
 
     let latestUid: string | null = null;
-    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
       latestUid = nextUser?.uid ?? null;
       setUser(nextUser);
       setProfile(null);
       if (nextUser) {
         try {
-          const snapshot = await getDoc(doc(db, "users", nextUser.uid));
+          const snapshot = await getDoc(doc(firestore, "users", nextUser.uid));
           if (latestUid === nextUser.uid && snapshot.exists()) setProfile({ uid: snapshot.id, ...snapshot.data() } as UserProfile);
         } catch {
           // Route guards handle a missing/unreadable profile without exposing backend details.
@@ -54,8 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     configured: isFirebaseConfigured,
     refreshProfile: async () => {
-      if (!user || !db) return;
-      const snapshot = await getDoc(doc(db, "users", user.uid));
+      const firestore = db;
+      if (!user || !firestore) return;
+      const snapshot = await getDoc(doc(firestore, "users", user.uid));
       setProfile(snapshot.exists() ? { uid: snapshot.id, ...snapshot.data() } as UserProfile : null);
     },
   }), [user, profile, loading]);
