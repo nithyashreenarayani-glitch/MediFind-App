@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Admin authority comes from a trusted Firebase Auth custom claim, never a
+    // role value supplied by a browser or a users/{uid} profile document.
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    match /users/{userId} {
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll([
+          'name', 'email', 'phone', 'role', 'isDisabled', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'name', 'email', 'phone', 'role', 'isDisabled', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() <= 30
+        && request.resource.data.role in ['USER', 'PHARMACY']
+        && request.resource.data.isDisabled == false
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+
+      allow update: if isAdmin() || (
+        signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'phone', 'updatedAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() <= 30
+        && request.resource.data.updatedAt == request.time
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // Phase 2 grants no data access to other collections. Add narrowly scoped
+    // rules alongside each feature instead of opening collections by default.
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
