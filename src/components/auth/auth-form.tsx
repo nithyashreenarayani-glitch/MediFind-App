@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { createUserWithEmailAndPassword, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, updateProfile } from "firebase/auth";
+import { createUserWithEmailAndPassword, GoogleAuthProvider, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { auth, db } from "@/lib/firebase/client";
 import { friendlyAuthError } from "@/lib/firebase/errors";
 import { useAuth } from "@/components/auth/auth-provider";
@@ -22,9 +22,56 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
+  const [role, setRole] = useState<UserRole>("USER");
   const { configured } = useAuth();
   const router = useRouter();
   const copy = descriptions[mode];
+  useEffect(() => {
+    if (mode === "register" && new URLSearchParams(window.location.search).get("role") === "PHARMACY") setRole("PHARMACY");
+  }, [mode]);
+
+  function continueTo(roleValue: string) {
+    const requested = new URLSearchParams(window.location.search).get("next");
+    const safeNext = requested?.startsWith("/") && !requested.startsWith("//") ? requested : null;
+    router.push(safeNext ?? (roleValue === "PHARMACY" ? "/pharmacy/dashboard" : roleValue === "ADMIN" ? "/admin/dashboard" : "/dashboard"));
+  }
+
+  async function continueWithGoogle() {
+    setError("");
+    setSuccess("");
+    setBusy(true);
+    try {
+      if (!auth || !db) throw new Error("Firebase is not configured");
+      const credential = await signInWithPopup(auth, new GoogleAuthProvider());
+      const profileRef = doc(db, "users", credential.user.uid);
+      let profileSnap = await getDoc(profileRef);
+      if (!profileSnap.exists()) {
+        const email = credential.user.email ?? "";
+        await setDoc(profileRef, {
+          name: credential.user.displayName?.trim() || email.split("@")[0] || "MediFind member",
+          email,
+          phone: credential.user.phoneNumber ?? "",
+          role: mode === "register" ? role : "USER",
+          isDisabled: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        profileSnap = await getDoc(profileRef);
+      }
+      if (!profileSnap.exists()) throw new Error("Profile unavailable");
+      const profile = profileSnap.data();
+      if (profile.isDisabled) {
+        await signOut(auth);
+        setError("This account has been disabled. Contact support for help.");
+        return;
+      }
+      continueTo(profile.role);
+    } catch (authError) {
+      setError(friendlyAuthError(authError));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -52,23 +99,31 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
       } else if (mode === "login") {
         const credential = await signInWithEmailAndPassword(auth, email, password);
         const selected = credential.user;
-        const profileSnap = await getDoc(doc(db, "users", selected.uid));
+        let profileSnap = await getDoc(doc(db, "users", selected.uid));
         if (!profileSnap.exists()) {
-          await signOut(auth);
-          setError("We couldn't find a profile for this account. Contact support for help.");
-          return;
+          await setDoc(doc(db, "users", selected.uid), {
+            name: selected.displayName?.trim() || email.split("@")[0], email,
+            phone: selected.phoneNumber ?? "", role: "USER", isDisabled: false,
+            createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+          });
+          profileSnap = await getDoc(doc(db, "users", selected.uid));
         }
+        if (!profileSnap.exists()) throw new Error("Profile unavailable");
         const profile = profileSnap.data();
         if (profile.isDisabled) {
           await signOut(auth);
           setError("This account has been disabled. Contact support for help.");
           return;
         }
-        router.push(profile.role === "PHARMACY" ? "/pharmacy/dashboard" : profile.role === "ADMIN" ? "/admin/dashboard" : "/dashboard");
+        continueTo(profile.role);
       } else {
         const name = String(form.get("name") ?? "").trim();
         const phone = String(form.get("phone") ?? "").trim();
-        const role = String(form.get("role") ?? "USER") as UserRole;
+        const selectedRole = String(form.get("role") ?? role) as UserRole;
+        if (selectedRole !== "USER" && selectedRole !== "PHARMACY") {
+          setError("Choose a valid account type.");
+          return;
+        }
         if (!name) {
           setError("Enter your name to continue.");
           return;
@@ -80,7 +135,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
             name,
             email,
             phone,
-            role,
+            role: selectedRole,
             isDisabled: false,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -89,7 +144,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
           await credential.user.delete();
           throw profileError;
         }
-        router.push(role === "PHARMACY" ? "/pharmacy/dashboard" : "/dashboard");
+        continueTo(selectedRole);
       }
     } catch (authError) {
       setError(friendlyAuthError(authError));
@@ -106,7 +161,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
       {mode === "register" && <>
         <label>Full name<input name="name" autoComplete="name" required maxLength={100} /></label>
         <label>Phone <span className="optional-label">(optional)</span><input name="phone" type="tel" autoComplete="tel" maxLength={30} /></label>
-        <label>Account type<select name="role" defaultValue="USER"><option value="USER">Personal account</option><option value="PHARMACY">Pharmacy account</option></select></label>
+        <label>Account type<select name="role" value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option value="USER">Personal account</option><option value="PHARMACY">Pharmacy account</option></select></label>
       </>}
       <label>Email address<input name="email" type="email" autoComplete="email" required maxLength={254} /></label>
       {mode !== "reset" && <label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} maxLength={128} /></label>}
@@ -116,6 +171,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
       {success && <div className="auth-success" role="status">{success}</div>}
       <button className="button auth-submit" disabled={busy || !configured}>{busy ? "Please wait…" : copy.button}</button>
     </form>
+    {mode !== "reset" && <><div className="auth-divider"><span>or continue with</span></div><button type="button" className="google-button" onClick={continueWithGoogle} disabled={busy || !configured}><span className="google-g" aria-hidden="true">G</span>Continue with Google</button></>}
     {mode === "login" ? <p className="auth-switch">New to MediFind? <Link href="/register">Create an account</Link></p> : mode === "register" ? <p className="auth-switch">Already have an account? <Link href="/login">Log in</Link></p> : <p className="auth-switch"><Link href="/login">Back to log in</Link></p>}
     <p className="auth-disclaimer">MediFind helps you find pharmacy-reported inventory. It does not provide medical advice.</p>
   </section></main>;

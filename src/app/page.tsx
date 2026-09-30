@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, Check, Clock3, MapPin, Search, ShieldCheck, Store } from "lucide-react";
+import { SiteHeader } from "@/components/site-header";
 
 const steps = [
   { number: "01", title: "Search your medicine", text: "Look up a medicine by name, brand, or generic name." },
@@ -10,11 +11,7 @@ const steps = [
 export default function Home() {
   return (
     <main>
-      <header className="site-header">
-        <Link href="/" className="brand" aria-label="MediFind home"><span className="brand-mark">m</span><span>MediFind</span></Link>
-        <nav className="desktop-nav" aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#for-pharmacies">For pharmacies</a></nav>
-        <div className="nav-actions"><Link className="nav-login" href="/login">Log in</Link><Link className="button button-small" href="/search">Find a medicine <ArrowRight size={16} /></Link></div>
-      </header>
+      <SiteHeader />
 
       <section className="hero">
         <div className="hero-copy">

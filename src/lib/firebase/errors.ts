@@ -12,6 +12,11 @@ const friendlyErrors: Record<string, string> = {
   "auth/network-request-failed": "We could not connect. Check your internet connection and try again.",
   "auth/operation-not-allowed": "Email and password sign-in is not enabled for this Firebase project.",
   "auth/missing-email": "Enter your email address first.",
+  "auth/popup-closed-by-user": "The Google sign-in window was closed before it finished.",
+  "auth/popup-blocked": "Your browser blocked the Google sign-in window. Allow popups and try again.",
+  "auth/cancelled-popup-request": "A sign-in request is already open. Finish it or try again.",
+  "auth/unauthorized-domain": "This website domain is not authorized for Firebase sign-in. Add it in Firebase Authentication settings.",
+  "auth/account-exists-with-different-credential": "An account already exists for this email using another sign-in method. Log in with that method first.",
 };
 
 export function friendlyAuthError(error: unknown): string {

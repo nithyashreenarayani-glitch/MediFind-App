@@ -1,0 +1,21 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function ownsPharmacy(pharmacyId) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/pharmacies/$(pharmacyId))
+        && firestore.get(/databases/(default)/documents/pharmacies/$(pharmacyId)).data.ownerId == request.auth.uid;
+    }
+    function isAdmin() { return signedIn() && request.auth.token.admin == true; }
+    match /pharmacies/{pharmacyId}/logos/{fileName} {
+      allow read: if isAdmin() || ownsPharmacy(pharmacyId)
+        || firestore.get(/databases/(default)/documents/pharmacies/$(pharmacyId)).data.approvalStatus == 'APPROVED';
+      allow create, update: if isAdmin() || (ownsPharmacy(pharmacyId)
+        && request.resource.size < 3 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*'));
+      allow delete: if isAdmin() || ownsPharmacy(pharmacyId);
+    }
+    match /{allPaths=**} { allow read, write: if isAdmin(); }
+  }
+}

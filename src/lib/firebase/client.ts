@@ -1,6 +1,7 @@
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -15,10 +16,11 @@ const configured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && 
 
 /** Firebase client services are available only after environment configuration. */
 let app: FirebaseApp | null = null;
-if (configured) app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+if (configured && typeof window !== "undefined") app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export const firebaseApp = app;
 
 export const auth = firebaseApp ? getAuth(firebaseApp) : null;
 export const db = firebaseApp ? getFirestore(firebaseApp) : null;
+export const storage = firebaseApp ? getStorage(firebaseApp) : null;
 export const isFirebaseConfigured = configured;

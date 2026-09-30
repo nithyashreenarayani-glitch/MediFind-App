@@ -1,58 +1,130 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null;
+    function signedIn() { return request.auth != null; }
+    function isAdmin() { return signedIn() && request.auth.token.admin == true; }
+    function isSelf(userId) { return signedIn() && request.auth.uid == userId; }
+    function profileExists() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function activeAccount() { return profileExists() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isDisabled == false; }
+    function ownsPharmacy(pharmacyId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/pharmacies/$(pharmacyId))
+        && get(/databases/$(database)/documents/pharmacies/$(pharmacyId)).data.ownerId == request.auth.uid;
     }
-
-    // Admin authority comes from a trusted Firebase Auth custom claim, never a
-    // role value supplied by a browser or a users/{uid} profile document.
-    function isAdmin() {
-      return signedIn() && request.auth.token.admin == true;
+    function pharmacyApproved(pharmacyId) {
+      return exists(/databases/$(database)/documents/pharmacies/$(pharmacyId))
+        && get(/databases/$(database)/documents/pharmacies/$(pharmacyId)).data.approvalStatus == 'APPROVED';
     }
 
     match /users/{userId} {
-      allow create: if signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.keys().hasAll([
-          'name', 'email', 'phone', 'role', 'isDisabled', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.keys().hasOnly([
-          'name', 'email', 'phone', 'role', 'isDisabled', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 100
+      allow create: if isSelf(userId)
+        && request.resource.data.keys().hasAll(['name', 'email', 'phone', 'role', 'isDisabled', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['name', 'email', 'phone', 'role', 'isDisabled', 'createdAt', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 100
         && request.resource.data.email == request.auth.token.email
-        && request.resource.data.phone is string
-        && request.resource.data.phone.size() <= 30
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 30
         && request.resource.data.role in ['USER', 'PHARMACY']
         && request.resource.data.isDisabled == false
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time;
-
-      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
-
-      allow update: if isAdmin() || (
-        signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['name', 'phone', 'updatedAt'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 100
-        && request.resource.data.phone is string
-        && request.resource.data.phone.size() <= 30
-        && request.resource.data.updatedAt == request.time
-      );
-
+        && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow read: if isSelf(userId) || isAdmin();
+      allow update: if isAdmin() || (isSelf(userId) && activeAccount()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 100
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 30
+        && request.resource.data.updatedAt == request.time);
       allow delete: if isAdmin();
     }
 
-    // Phase 2 grants no data access to other collections. Add narrowly scoped
-    // rules alongside each feature instead of opening collections by default.
-    match /{document=**} {
-      allow read, write: if isAdmin();
+    match /pharmacies/{pharmacyId} {
+      allow read: if isAdmin() || resource.data.approvalStatus == 'APPROVED' || (signedIn() && resource.data.ownerId == request.auth.uid);
+      allow create: if activeAccount()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'PHARMACY'
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.approvalStatus == 'PENDING'
+        && request.resource.data.keys().hasAll(['ownerId', 'name', 'address', 'city', 'phone', 'latitude', 'longitude', 'openingHours', 'approvalStatus', 'createdAt', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 120
+        && request.resource.data.address is string && request.resource.data.address.size() >= 4 && request.resource.data.address.size() <= 240
+        && request.resource.data.city is string && request.resource.data.city.size() >= 2 && request.resource.data.city.size() <= 100
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 30
+        && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update: if isAdmin() || (activeAccount() && resource.data.ownerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'address', 'city', 'phone', 'latitude', 'longitude', 'openingHours', 'logoUrl', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 120
+        && request.resource.data.updatedAt == request.time);
+      allow delete: if isAdmin();
     }
+
+    match /medicines/{medicineId} {
+      allow read: if true;
+      allow create: if activeAccount() && request.resource.data.keys().hasAll(['name', 'genericName', 'brand', 'strength', 'form', 'category', 'description', 'createdByPharmacyId', 'createdAt', 'updatedAt'])
+        && ownsPharmacy(request.resource.data.createdByPharmacyId)
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+        && request.resource.data.form is string && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update: if isAdmin() || (activeAccount() && ownsPharmacy(resource.data.createdByPharmacyId)
+        && request.resource.data.createdByPharmacyId == resource.data.createdByPharmacyId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'genericName', 'brand', 'strength', 'form', 'category', 'description', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.updatedAt == request.time);
+      allow delete: if isAdmin();
+    }
+
+    match /inventory/{inventoryId} {
+      // `isPublic` is the queryable visibility gate. Cloud Functions mirror pharmacy
+      // approval changes onto this field; clients cannot publish their own records.
+      allow read: if isAdmin() || ownsPharmacy(resource.data.pharmacyId) || resource.data.isPublic == true;
+      allow create: if activeAccount() && ownsPharmacy(request.resource.data.pharmacyId)
+        && request.resource.data.keys().hasAll(['pharmacyId', 'medicineId', 'quantity', 'minimumStock', 'status', 'isPublic', 'updatedAt'])
+        && request.resource.data.quantity is int && request.resource.data.quantity >= 0 && request.resource.data.quantity <= 100000
+        && request.resource.data.minimumStock is int && request.resource.data.minimumStock >= 0 && request.resource.data.minimumStock <= 100000
+        && request.resource.data.status == (request.resource.data.quantity == 0 ? 'OUT_OF_STOCK' : request.resource.data.quantity <= request.resource.data.minimumStock ? 'LOW_STOCK' : 'AVAILABLE')
+        && request.resource.data.isPublic == pharmacyApproved(request.resource.data.pharmacyId)
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isAdmin() || (activeAccount() && ownsPharmacy(resource.data.pharmacyId)
+        && request.resource.data.pharmacyId == resource.data.pharmacyId
+        && request.resource.data.medicineId == resource.data.medicineId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['quantity', 'minimumStock', 'status', 'isPublic', 'updatedAt'])
+        && request.resource.data.quantity is int && request.resource.data.quantity >= 0 && request.resource.data.quantity <= 100000
+        && request.resource.data.minimumStock is int && request.resource.data.minimumStock >= 0 && request.resource.data.minimumStock <= 100000
+        && request.resource.data.status == (request.resource.data.quantity == 0 ? 'OUT_OF_STOCK' : request.resource.data.quantity <= request.resource.data.minimumStock ? 'LOW_STOCK' : 'AVAILABLE')
+        && request.resource.data.isPublic == pharmacyApproved(resource.data.pharmacyId)
+        && request.resource.data.updatedAt == request.time);
+      allow delete: if isAdmin();
+    }
+
+    match /reservations/{reservationId} {
+      allow read: if isAdmin() || (signedIn() && (resource.data.userId == request.auth.uid || ownsPharmacy(resource.data.pharmacyId)));
+      // Reservation create/update and stock changes are performed transactionally by callable Functions.
+      allow write: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isAdmin();
+      allow update: if signedIn() && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+        && request.resource.data.read is bool;
+      allow delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /notificationSubscriptions/{subscriptionId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if activeAccount() && request.resource.data.userId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['userId', 'medicineId', 'pharmacyId', 'active', 'createdAt'])
+        && request.resource.data.active == true && request.resource.data.createdAt == request.time;
+      allow update: if signedIn() && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+        && request.resource.data.active is bool;
+      allow delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /favorites/{favoriteId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if activeAccount() && request.resource.data.userId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['userId', 'pharmacyId', 'createdAt']) && request.resource.data.createdAt == request.time;
+      allow delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update: if false;
+    }
+
+    match /activityLogs/{logId} { allow read, write: if isAdmin(); }
+    match /{document=**} { allow read, write: if isAdmin(); }
   }
 }
